@@ -8,7 +8,7 @@ import SphereEntity from './SphereEntity';
 import PyramidEntity from './PyramidEntity';
 
 export default class VRScene {
-    private readonly debugMode = true;
+    private readonly debugMode = false;
 
     private scene: THREE.Scene;
     private camera: THREE.PerspectiveCamera;
