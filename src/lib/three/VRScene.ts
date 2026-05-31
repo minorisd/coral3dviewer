@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
+import { StereoEffect } from 'three/examples/jsm/effects/StereoEffect.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 
 import Entity from './Entity';
@@ -13,6 +13,7 @@ export default class VRScene {
     private scene: THREE.Scene;
     private camera: THREE.PerspectiveCamera;
     private renderer: THREE.WebGLRenderer;
+    private stereoEffect: StereoEffect;
 
     private controls?: PointerLockControls;
 
@@ -27,7 +28,6 @@ export default class VRScene {
 
     private gazeTarget: THREE.Object3D | null = null;
     private gazeStartTime = 0;
-
     private readonly gazeDuration = 3000;
 
     private progressRing!: THREE.Line;
@@ -35,12 +35,28 @@ export default class VRScene {
 
     private previousTime = performance.now();
 
+    private deviceAlpha = 0;
+    private deviceBeta = 0;
+    private deviceGamma = 0;
+    private screenOrientation = 0;
+    private sensorsEnabled = false;
+
+    private zee = new THREE.Vector3(0, 0, 1);
+    private euler = new THREE.Euler();
+    private q0 = new THREE.Quaternion();
+    private q1 = new THREE.Quaternion(
+        -Math.sqrt(0.5),
+        0,
+        0,
+        Math.sqrt(0.5)
+    );
+
     constructor(container: HTMLElement) {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x87ceeb);
 
         this.camera = new THREE.PerspectiveCamera(
-            70,
+            75,
             window.innerWidth / window.innerHeight,
             0.1,
             100
@@ -52,12 +68,13 @@ export default class VRScene {
             antialias: true
         });
 
-        this.renderer.setSize(
-            window.innerWidth,
-            window.innerHeight
-        );
+        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
 
         container.appendChild(this.renderer.domElement);
+
+        this.stereoEffect = new StereoEffect(this.renderer);
+        this.stereoEffect.setSize(window.innerWidth, window.innerHeight);
 
         if (this.debugMode) {
             this.controls = new PointerLockControls(
@@ -69,27 +86,14 @@ export default class VRScene {
                 this.controls?.lock();
             });
         } else {
-            this.renderer.xr.enabled = true;
-
-            document.body.appendChild(
-                VRButton.createButton(this.renderer)
-            );
+            this.createStartButton();
         }
 
-        const ambient = new THREE.AmbientLight(
-            0xffffff,
-            1.5
-        );
-
+        const ambient = new THREE.AmbientLight(0xffffff, 1.5);
         this.scene.add(ambient);
 
-        const light = new THREE.DirectionalLight(
-            0xffffff,
-            2
-        );
-
+        const light = new THREE.DirectionalLight(0xffffff, 2);
         light.position.set(5, 5, 5);
-
         this.scene.add(light);
 
         this.createEntities();
@@ -97,12 +101,83 @@ export default class VRScene {
         this.createCrosshair();
 
         window.addEventListener('resize', this.onResize);
+        window.addEventListener('orientationchange', this.updateScreenOrientation);
 
-        if (this.debugMode) {
-            requestAnimationFrame(this.animateDesktop);
-        } else {
-            this.renderer.setAnimationLoop(this.animateVR);
+        requestAnimationFrame(this.animate);
+    }
+
+    private createStartButton() {
+        const button = document.createElement('button');
+
+        button.innerText = 'Start VR';
+
+        button.style.position = 'fixed';
+        button.style.left = '50%';
+        button.style.top = '50%';
+        button.style.transform = 'translate(-50%, -50%)';
+        button.style.zIndex = '100';
+        button.style.fontSize = '22px';
+        button.style.padding = '16px 24px';
+
+        document.body.appendChild(button);
+
+        button.addEventListener('click', async () => {
+            await this.enablePhoneSensors();
+
+            if (document.documentElement.requestFullscreen) {
+                await document.documentElement.requestFullscreen();
+            }
+
+            button.remove();
+        });
+    }
+
+    private async enablePhoneSensors() {
+        const deviceOrientationEvent = DeviceOrientationEvent as unknown as {
+            requestPermission?: () => Promise<PermissionState>;
+        };
+
+        if (deviceOrientationEvent.requestPermission) {
+            const permission = await deviceOrientationEvent.requestPermission();
+
+            if (permission !== 'granted') {
+                return;
+            }
         }
+
+        window.addEventListener('deviceorientation', this.onDeviceOrientation);
+        this.updateScreenOrientation();
+        this.sensorsEnabled = true;
+    }
+
+    private onDeviceOrientation = (event: DeviceOrientationEvent) => {
+        this.deviceAlpha = event.alpha ?? 0;
+        this.deviceBeta = event.beta ?? 0;
+        this.deviceGamma = event.gamma ?? 0;
+    };
+
+    private updateScreenOrientation = () => {
+        const orientation = screen.orientation?.angle ?? window.orientation ?? 0;
+        this.screenOrientation = Number(orientation);
+    };
+
+    private updatePhoneCamera() {
+        if (!this.sensorsEnabled) {
+            return;
+        }
+
+        const alpha = THREE.MathUtils.degToRad(this.deviceAlpha);
+        const beta = THREE.MathUtils.degToRad(this.deviceBeta);
+        const gamma = THREE.MathUtils.degToRad(this.deviceGamma);
+        const orient = THREE.MathUtils.degToRad(this.screenOrientation);
+
+        this.euler.set(beta, alpha, -gamma, 'YXZ');
+
+        this.camera.quaternion.setFromEuler(this.euler);
+        this.camera.quaternion.multiply(this.q1);
+        this.camera.quaternion.multiply(
+            this.q0.setFromAxisAngle(this.zee, -orient)
+        );
     }
 
     private createEntities() {
@@ -163,18 +238,11 @@ export default class VRScene {
             color: 0xffffff
         });
 
-        return new THREE.Mesh(
-            geometry,
-            material
-        );
+        return new THREE.Mesh(geometry, material);
     }
 
     private createCrosshair() {
-        const crosshairGeometry = new THREE.RingGeometry(
-            0.015,
-            0.03,
-            32
-        );
+        const crosshairGeometry = new THREE.RingGeometry(0.015, 0.03, 32);
 
         const crosshairMaterial = new THREE.MeshBasicMaterial({
             color: 0xffffff,
@@ -187,7 +255,6 @@ export default class VRScene {
         );
 
         crosshair.position.z = -2;
-
         this.camera.add(crosshair);
 
         this.progressGeometry = new THREE.BufferGeometry();
@@ -203,7 +270,6 @@ export default class VRScene {
         );
 
         this.progressRing.position.z = -1.99;
-
         this.camera.add(this.progressRing);
 
         this.updateProgressRing(0);
@@ -212,26 +278,19 @@ export default class VRScene {
     }
 
     private updateProgressRing(progress: number) {
-        const fixedProgress = Math.max(
-            0,
-            Math.min(progress, 1)
-        );
+        const fixedProgress = Math.max(0, Math.min(progress, 1));
 
         const segments = 64;
         const radius = 0.04;
         const points: number[] = [];
 
         if (fixedProgress > 0) {
-            const visibleSegments = Math.ceil(
-                segments * fixedProgress
-            );
+            const visibleSegments = Math.ceil(segments * fixedProgress);
 
             for (let i = 0; i <= visibleSegments; i++) {
                 const angle =
                     -Math.PI / 2 +
-                    Math.PI * 2 *
-                    fixedProgress *
-                    (i / visibleSegments);
+                    Math.PI * 2 * fixedProgress * (i / visibleSegments);
 
                 points.push(
                     Math.cos(angle) * radius,
@@ -242,46 +301,23 @@ export default class VRScene {
         }
 
         this.progressGeometry.dispose();
-
         this.progressGeometry = new THREE.BufferGeometry();
 
         this.progressGeometry.setAttribute(
             'position',
-            new THREE.Float32BufferAttribute(
-                points,
-                3
-            )
+            new THREE.Float32BufferAttribute(points, 3)
         );
 
         this.progressRing.geometry = this.progressGeometry;
     }
 
     private checkGaze() {
-        if (this.debugMode) {
-            this.raycaster.setFromCamera(
-                new THREE.Vector2(0, 0),
-                this.camera
-            );
-        } else {
-            const direction = new THREE.Vector3(
-                0,
-                0,
-                -1
-            );
-
-            direction.applyQuaternion(
-                this.camera.quaternion
-            );
-
-            this.raycaster.set(
-                this.camera.position,
-                direction.normalize()
-            );
-        }
-
-        const hits = this.raycaster.intersectObjects(
-            this.buttons
+        this.raycaster.setFromCamera(
+            new THREE.Vector2(0, 0),
+            this.camera
         );
+
+        const hits = this.raycaster.intersectObjects(this.buttons);
 
         if (hits.length === 0) {
             this.gazeTarget = null;
@@ -351,34 +387,30 @@ export default class VRScene {
 
     private update() {
         const now = performance.now();
-
         const delta = (now - this.previousTime) / 1000;
 
         this.previousTime = now;
 
-        this.entities[this.currentEntity].update(delta);
+        if (this.debugMode) {
+            this.controls?.update(0);
+        } else {
+            this.updatePhoneCamera();
+        }
 
+        this.entities[this.currentEntity].update(delta);
         this.checkGaze();
     }
 
-    private animateDesktop = () => {
+    private animate = () => {
         this.update();
 
-        this.renderer.render(
-            this.scene,
-            this.camera
-        );
+        if (this.debugMode) {
+            this.renderer.render(this.scene, this.camera);
+        } else {
+            this.stereoEffect.render(this.scene, this.camera);
+        }
 
-        requestAnimationFrame(this.animateDesktop);
-    };
-
-    private animateVR = () => {
-        this.update();
-
-        this.renderer.render(
-            this.scene,
-            this.camera
-        );
+        requestAnimationFrame(this.animate);
     };
 
     private onResize = () => {
@@ -388,6 +420,11 @@ export default class VRScene {
         this.camera.updateProjectionMatrix();
 
         this.renderer.setSize(
+            window.innerWidth,
+            window.innerHeight
+        );
+
+        this.stereoEffect.setSize(
             window.innerWidth,
             window.innerHeight
         );
