@@ -36,9 +36,11 @@ export default class VRScene {
 
     private readonly center = new THREE.Vector3(0, 1, 0);
     private readonly eyeHeight = 1.6;
-    private readonly buttonDistance = 2.4;
+
+    private readonly buttonDistance = 2.1;
     private readonly buttonHeight = 1;
     private readonly buttonSideAngle = Math.PI / 5;
+    private readonly buttonScale = 0.55;
 
     constructor(container: HTMLElement) {
         this.scene = new THREE.Scene();
@@ -105,6 +107,9 @@ export default class VRScene {
         this.leftButton = this.createArrow(false);
         this.rightButton = this.createArrow(true);
 
+        this.leftButton.scale.setScalar(this.buttonScale);
+        this.rightButton.scale.setScalar(this.buttonScale);
+
         this.leftButton.userData.direction = 'left';
         this.rightButton.userData.direction = 'right';
 
@@ -150,8 +155,8 @@ export default class VRScene {
 
     private createTeleportRing() {
         const geometry = new THREE.RingGeometry(
-            3.8,
-            4.2,
+            3.7,
+            4.4,
             128
         );
 
@@ -159,13 +164,14 @@ export default class VRScene {
             color: 0xffffff,
             side: THREE.DoubleSide,
             transparent: true,
-            opacity: 0.35
+            opacity: 0.45,
+            depthWrite: false
         });
 
         this.teleportRing = new THREE.Mesh(geometry, material);
 
         this.teleportRing.rotation.x = -Math.PI / 2;
-        this.teleportRing.position.y = 0;
+        this.teleportRing.position.set(0, 0.02, 0);
 
         this.scene.add(this.teleportRing);
     }
@@ -245,15 +251,9 @@ export default class VRScene {
     }
 
     private updateButtonPositions() {
-        const playerPosition = new THREE.Vector3(
-            this.player.position.x,
-            this.buttonHeight,
-            this.player.position.z
-        );
-
         const angleToPlayer = Math.atan2(
-            playerPosition.x - this.center.x,
-            playerPosition.z - this.center.z
+            this.player.position.x - this.center.x,
+            this.player.position.z - this.center.z
         );
 
         this.setButtonOnCircle(
@@ -275,7 +275,11 @@ export default class VRScene {
         const z = this.center.z + Math.cos(angle) * this.buttonDistance;
 
         button.position.set(x, this.buttonHeight, z);
-        button.lookAt(this.player.position);
+        button.lookAt(
+            this.player.position.x,
+            this.buttonHeight,
+            this.player.position.z
+        );
     }
 
     private setGazeRay() {
@@ -305,10 +309,13 @@ export default class VRScene {
             return;
         }
 
-        const ringHits = this.raycaster.intersectObject(this.teleportRing);
+        const ringHits = this.raycaster.intersectObject(
+            this.teleportRing,
+            false
+        );
 
         if (ringHits.length > 0) {
-            const target = ringHits[0].object;
+            const target = this.teleportRing;
 
             this.lastTeleportPoint.copy(ringHits[0].point);
 
@@ -347,7 +354,8 @@ export default class VRScene {
         if (elapsed >= this.gazeDuration) {
             action();
 
-            this.gazeStartTime = performance.now();
+            this.gazeTarget = null;
+            this.gazeStartTime = 0;
             this.updateProgressRing(0);
         }
     }
@@ -418,7 +426,6 @@ export default class VRScene {
 
     private animate = () => {
         this.update();
-
         this.renderer.render(this.scene, this.camera);
     };
 
