@@ -314,15 +314,20 @@ export default class VRScene {
     }
 
     private setGazeRay() {
-        const xrCamera = this.renderer.xr.getCamera(this.camera);
+        const xrCamera = this.renderer.xr.getCamera();
+
+        const activeCamera =
+            (xrCamera as THREE.ArrayCamera).isArrayCamera
+                ? (xrCamera as THREE.ArrayCamera).cameras[0]
+                : xrCamera;
 
         const position = new THREE.Vector3();
-        const direction = new THREE.Vector3(0, 0, -1);
+        const direction = new THREE.Vector3();
 
-        xrCamera.getWorldPosition(position);
-        direction.applyQuaternion(xrCamera.quaternion);
+        activeCamera.getWorldPosition(position);
+        activeCamera.getWorldDirection(direction);
 
-        this.raycaster.set(position, direction.normalize());
+        this.raycaster.set(position, direction);
     }
 
     private checkGaze() {
