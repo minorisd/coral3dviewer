@@ -8,7 +8,7 @@ import SphereEntity from './SphereEntity';
 import PyramidEntity from './PyramidEntity';
 
 export default class VRScene {
-    private readonly debugMode = false;
+    private readonly debugMode = true;
 
     private scene: THREE.Scene;
     private camera: THREE.PerspectiveCamera;
@@ -25,6 +25,9 @@ export default class VRScene {
     private rightButton!: THREE.Mesh;
     private buttons: THREE.Object3D[] = [];
 
+    private teleportRing!: THREE.Mesh;
+    private lastTeleportPoint = new THREE.Vector3();
+
     private gazeTarget: THREE.Object3D | null = null;
     private gazeStartTime = 0;
     private readonly gazeDuration = 3000;
@@ -33,6 +36,11 @@ export default class VRScene {
     private progressGeometry!: THREE.BufferGeometry;
 
     private previousTime = performance.now();
+
+    private readonly center = new THREE.Vector3(0, 1, 0);
+    private readonly buttonDistance = 2.4;
+    private readonly buttonHeight = 1;
+    private readonly buttonSideAngle = Math.PI / 5;
 
     constructor(container: HTMLElement) {
         this.scene = new THREE.Scene();
@@ -45,7 +53,8 @@ export default class VRScene {
             100
         );
 
-        this.camera.position.set(0, 0, 0);
+        this.camera.position.set(0, 1.6, 5);
+        this.camera.lookAt(this.center);
 
         this.renderer = new THREE.WebGLRenderer({
             antialias: true
@@ -82,6 +91,7 @@ export default class VRScene {
 
         this.createEntities();
         this.createButtons();
+        this.createTeleportRing();
         this.createCrosshair();
 
         window.addEventListener('resize', this.onResize);
@@ -99,7 +109,7 @@ export default class VRScene {
         this.entities.push(new PyramidEntity());
 
         for (const entity of this.entities) {
-            entity.object.position.set(0, 0, -3);
+            entity.object.position.copy(this.center);
             entity.hide();
             this.scene.add(entity.object);
         }
@@ -111,9 +121,6 @@ export default class VRScene {
         this.leftButton = this.createArrow(false);
         this.rightButton = this.createArrow(true);
 
-        this.leftButton.position.set(-2.5, 0, -3);
-        this.rightButton.position.set(2.5, 0, -3);
-
         this.leftButton.userData.direction = 'left';
         this.rightButton.userData.direction = 'right';
 
@@ -122,6 +129,8 @@ export default class VRScene {
 
         this.buttons.push(this.leftButton);
         this.buttons.push(this.rightButton);
+
+        this.updateButtonPositions();
     }
 
     private createArrow(right: boolean) {
@@ -148,14 +157,73 @@ export default class VRScene {
         const geometry = new THREE.ShapeGeometry(shape);
 
         const material = new THREE.MeshBasicMaterial({
-            color: 0xffffff
+            color: 0xffffff,
+            side: THREE.DoubleSide
         });
 
         return new THREE.Mesh(geometry, material);
     }
 
+    private updateButtonPositions() {
+        const cameraPosition = new THREE.Vector3();
+        this.camera.getWorldPosition(cameraPosition);
+
+        const angleToCamera = Math.atan2(
+            cameraPosition.x - this.center.x,
+            cameraPosition.z - this.center.z
+        );
+
+        this.setButtonOnCircle(
+            this.leftButton,
+            angleToCamera - this.buttonSideAngle
+        );
+
+        this.setButtonOnCircle(
+            this.rightButton,
+            angleToCamera + this.buttonSideAngle
+        );
+    }
+
+    private setButtonOnCircle(
+        button: THREE.Mesh,
+        angle: number
+    ) {
+        const x = this.center.x + Math.sin(angle) * this.buttonDistance;
+        const z = this.center.z + Math.cos(angle) * this.buttonDistance;
+
+        button.position.set(x, this.buttonHeight, z);
+
+        button.lookAt(this.camera.position);
+    }
+
+    private createTeleportRing() {
+        const geometry = new THREE.RingGeometry(
+            3.8,
+            4.2,
+            128
+        );
+
+        const material = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.35
+        });
+
+        this.teleportRing = new THREE.Mesh(geometry, material);
+
+        this.teleportRing.rotation.x = -Math.PI / 2;
+        this.teleportRing.position.y = 0;
+
+        this.scene.add(this.teleportRing);
+    }
+
     private createCrosshair() {
-        const crosshairGeometry = new THREE.RingGeometry(0.015, 0.03, 32);
+        const crosshairGeometry = new THREE.RingGeometry(
+            0.015,
+            0.03,
+            32
+        );
 
         const crosshairMaterial = new THREE.MeshBasicMaterial({
             color: 0xffffff,
@@ -198,7 +266,9 @@ export default class VRScene {
         const points: number[] = [];
 
         if (fixedProgress > 0) {
-            const visibleSegments = Math.ceil(segments * fixedProgress);
+            const visibleSegments = Math.ceil(
+                segments * fixedProgress
+            );
 
             for (let i = 0; i <= visibleSegments; i++) {
                 const angle =
@@ -214,7 +284,6 @@ export default class VRScene {
         }
 
         this.progressGeometry.dispose();
-
         this.progressGeometry = new THREE.BufferGeometry();
 
         this.progressGeometry.setAttribute(
@@ -225,35 +294,65 @@ export default class VRScene {
         this.progressRing.geometry = this.progressGeometry;
     }
 
-    private checkGaze() {
+    private setGazeRay() {
         if (this.debugMode) {
             this.raycaster.setFromCamera(
                 new THREE.Vector2(0, 0),
                 this.camera
             );
-        } else {
-            const xrCamera = this.renderer.xr.getCamera(this.camera);
 
-            const direction = new THREE.Vector3(0, 0, -1);
-            const position = new THREE.Vector3();
-
-            xrCamera.getWorldPosition(position);
-            direction.applyQuaternion(xrCamera.quaternion);
-
-            this.raycaster.set(position, direction.normalize());
-        }
-
-        const hits = this.raycaster.intersectObjects(this.buttons);
-
-        if (hits.length === 0) {
-            this.gazeTarget = null;
-            this.gazeStartTime = 0;
-            this.updateProgressRing(0);
             return;
         }
 
-        const target = hits[0].object;
+        const xrCamera = this.renderer.xr.getCamera(this.camera);
 
+        const position = new THREE.Vector3();
+        const direction = new THREE.Vector3(0, 0, -1);
+
+        xrCamera.getWorldPosition(position);
+        direction.applyQuaternion(xrCamera.quaternion);
+
+        this.raycaster.set(position, direction.normalize());
+    }
+
+    private checkGaze() {
+        this.setGazeRay();
+
+        const buttonHits = this.raycaster.intersectObjects(this.buttons);
+
+        if (buttonHits.length > 0) {
+            const target = buttonHits[0].object;
+
+            this.handleGazeTarget(target, () => {
+                this.activateButton(target);
+            });
+
+            return;
+        }
+
+        const ringHits = this.raycaster.intersectObject(this.teleportRing);
+
+        if (ringHits.length > 0) {
+            const target = ringHits[0].object;
+
+            this.lastTeleportPoint.copy(ringHits[0].point);
+
+            this.handleGazeTarget(target, () => {
+                this.teleportToLastPoint();
+            });
+
+            return;
+        }
+
+        this.gazeTarget = null;
+        this.gazeStartTime = 0;
+        this.updateProgressRing(0);
+    }
+
+    private handleGazeTarget(
+        target: THREE.Object3D,
+        action: () => void
+    ) {
         if (target !== this.gazeTarget) {
             this.gazeTarget = target;
             this.gazeStartTime = performance.now();
@@ -271,7 +370,8 @@ export default class VRScene {
         this.updateProgressRing(progress);
 
         if (elapsed >= this.gazeDuration) {
-            this.activateButton(target);
+            action();
+
             this.gazeStartTime = performance.now();
             this.updateProgressRing(0);
         }
@@ -285,6 +385,16 @@ export default class VRScene {
         if (button.userData.direction === 'right') {
             this.nextEntity();
         }
+    }
+
+    private teleportToLastPoint() {
+        this.camera.position.set(
+            this.lastTeleportPoint.x,
+            1.6,
+            this.lastTeleportPoint.z
+        );
+
+        this.updateButtonPositions();
     }
 
     private nextEntity() {
@@ -319,6 +429,7 @@ export default class VRScene {
 
         this.entities[this.currentEntity].update(delta);
 
+        this.updateButtonPositions();
         this.checkGaze();
     }
 
