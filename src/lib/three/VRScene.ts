@@ -23,11 +23,12 @@ export default class VRScene {
     private buttons: THREE.Object3D[] = [];
 
     private teleportRing!: THREE.Mesh;
+    private teleportHitBox!: THREE.Mesh;
     private lastTeleportPoint = new THREE.Vector3();
 
     private gazeTarget: THREE.Object3D | null = null;
     private gazeStartTime = 0;
-    private readonly gazeDuration = 3000;
+    private readonly gazeDuration = 1000;
 
     private progressRing!: THREE.Line;
     private progressGeometry!: THREE.BufferGeometry;
@@ -40,7 +41,9 @@ export default class VRScene {
     private readonly buttonDistance = 2.1;
     private readonly buttonHeight = 1;
     private readonly buttonSideAngle = Math.PI / 5;
-    private readonly buttonScale = 0.55;
+    private readonly buttonScale = 0.45;
+
+    private readonly teleportRadius = 4;
 
     constructor(container: HTMLElement) {
         this.scene = new THREE.Scene();
@@ -55,7 +58,7 @@ export default class VRScene {
 
         this.camera.position.set(0, this.eyeHeight, 0);
 
-        this.player.position.set(0, 0, 5);
+        this.player.position.set(0, 0, this.teleportRadius);
         this.player.add(this.camera);
         this.scene.add(this.player);
 
@@ -154,13 +157,13 @@ export default class VRScene {
     }
 
     private createTeleportRing() {
-        const geometry = new THREE.RingGeometry(
-            3.7,
-            4.4,
+        const ringGeometry = new THREE.RingGeometry(
+            this.teleportRadius - 0.15,
+            this.teleportRadius + 0.15,
             128
         );
 
-        const material = new THREE.MeshBasicMaterial({
+        const ringMaterial = new THREE.MeshBasicMaterial({
             color: 0xffffff,
             side: THREE.DoubleSide,
             transparent: true,
@@ -168,12 +171,39 @@ export default class VRScene {
             depthWrite: false
         });
 
-        this.teleportRing = new THREE.Mesh(geometry, material);
+        this.teleportRing = new THREE.Mesh(
+            ringGeometry,
+            ringMaterial
+        );
 
         this.teleportRing.rotation.x = -Math.PI / 2;
-        this.teleportRing.position.set(0, 0.02, 0);
+        this.teleportRing.position.set(0, 0.03, 0);
 
         this.scene.add(this.teleportRing);
+
+        const hitBoxGeometry = new THREE.CylinderGeometry(
+            this.teleportRadius + 0.25,
+            this.teleportRadius + 0.25,
+            1.2,
+            128,
+            1,
+            true
+        );
+
+        const hitBoxMaterial = new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0,
+            side: THREE.DoubleSide
+        });
+
+        this.teleportHitBox = new THREE.Mesh(
+            hitBoxGeometry,
+            hitBoxMaterial
+        );
+
+        this.teleportHitBox.position.set(0, 0.6, 0);
+
+        this.scene.add(this.teleportHitBox);
     }
 
     private createCrosshair() {
@@ -252,8 +282,8 @@ export default class VRScene {
 
     private updateButtonPositions() {
         const angleToPlayer = Math.atan2(
-            this.player.position.x - this.center.x,
-            this.player.position.z - this.center.z
+            this.player.position.x,
+            this.player.position.z
         );
 
         this.setButtonOnCircle(
@@ -271,10 +301,11 @@ export default class VRScene {
         button: THREE.Mesh,
         angle: number
     ) {
-        const x = this.center.x + Math.sin(angle) * this.buttonDistance;
-        const z = this.center.z + Math.cos(angle) * this.buttonDistance;
+        const x = Math.sin(angle) * this.buttonDistance;
+        const z = Math.cos(angle) * this.buttonDistance;
 
         button.position.set(x, this.buttonHeight, z);
+
         button.lookAt(
             this.player.position.x,
             this.buttonHeight,
@@ -310,16 +341,16 @@ export default class VRScene {
         }
 
         const ringHits = this.raycaster.intersectObject(
-            this.teleportRing,
+            this.teleportHitBox,
             false
         );
 
         if (ringHits.length > 0) {
-            const target = this.teleportRing;
+            const point = ringHits[0].point;
 
-            this.lastTeleportPoint.copy(ringHits[0].point);
+            this.setTeleportPointFromHit(point);
 
-            this.handleGazeTarget(target, () => {
+            this.handleGazeTarget(this.teleportHitBox, () => {
                 this.teleportToLastPoint();
             });
 
@@ -329,6 +360,15 @@ export default class VRScene {
         this.gazeTarget = null;
         this.gazeStartTime = 0;
         this.updateProgressRing(0);
+    }
+
+    private setTeleportPointFromHit(point: THREE.Vector3) {
+        const angle = Math.atan2(point.x, point.z);
+
+        const x = Math.sin(angle) * this.teleportRadius;
+        const z = Math.cos(angle) * this.teleportRadius;
+
+        this.lastTeleportPoint.set(x, 0, z);
     }
 
     private handleGazeTarget(
