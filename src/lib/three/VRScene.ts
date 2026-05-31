@@ -1,7 +1,6 @@
 import * as THREE from 'three';
-import { StereoEffect } from 'three/examples/jsm/effects/StereoEffect.js';
-import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
+import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 
 import Entity from './Entity';
 import CubeEntity from './CubeEntity';
@@ -9,13 +8,11 @@ import SphereEntity from './SphereEntity';
 import PyramidEntity from './PyramidEntity';
 
 export default class VRScene {
-    private readonly debugMode = false;
-    private readonly phoneVrMode = true;
+    private readonly debugMode = true;
 
     private scene: THREE.Scene;
     private camera: THREE.PerspectiveCamera;
     private renderer: THREE.WebGLRenderer;
-    private stereoEffect?: StereoEffect;
 
     private controls?: PointerLockControls;
 
@@ -30,27 +27,13 @@ export default class VRScene {
 
     private gazeTarget: THREE.Object3D | null = null;
     private gazeStartTime = 0;
+
     private readonly gazeDuration = 3000;
 
     private progressRing!: THREE.Line;
     private progressGeometry!: THREE.BufferGeometry;
 
     private previousTime = performance.now();
-
-    private deviceAlpha = 0;
-    private deviceBeta = 0;
-    private deviceGamma = 0;
-    private screenOrientation = 0;
-
-    private zee = new THREE.Vector3(0, 0, 1);
-    private euler = new THREE.Euler();
-    private q0 = new THREE.Quaternion();
-    private q1 = new THREE.Quaternion(
-        -Math.sqrt(0.5),
-        0,
-        0,
-        Math.sqrt(0.5)
-    );
 
     constructor(container: HTMLElement) {
         this.scene = new THREE.Scene();
@@ -85,15 +68,6 @@ export default class VRScene {
             this.renderer.domElement.addEventListener('click', () => {
                 this.controls?.lock();
             });
-        } else if (this.phoneVrMode) {
-            this.stereoEffect = new StereoEffect(this.renderer);
-
-            this.stereoEffect.setSize(
-                window.innerWidth,
-                window.innerHeight
-            );
-
-            this.createStartButton();
         } else {
             this.renderer.xr.enabled = true;
 
@@ -123,89 +97,12 @@ export default class VRScene {
         this.createCrosshair();
 
         window.addEventListener('resize', this.onResize);
-        window.addEventListener('orientationchange', this.updateScreenOrientation);
 
-        if (this.debugMode || this.phoneVrMode) {
-            requestAnimationFrame(this.animateNormal);
+        if (this.debugMode) {
+            requestAnimationFrame(this.animateDesktop);
         } else {
-            this.renderer.setAnimationLoop(this.animateWebXR);
+            this.renderer.setAnimationLoop(this.animateVR);
         }
-    }
-
-    private createStartButton() {
-        const button = document.createElement('button');
-
-        button.innerText = 'Start phone VR';
-
-        button.style.position = 'fixed';
-        button.style.left = '50%';
-        button.style.top = '50%';
-        button.style.transform = 'translate(-50%, -50%)';
-        button.style.zIndex = '10';
-        button.style.fontSize = '22px';
-        button.style.padding = '16px 24px';
-
-        document.body.appendChild(button);
-
-        button.addEventListener('click', async () => {
-            await this.enablePhoneSensors();
-
-            if (document.documentElement.requestFullscreen) {
-                await document.documentElement.requestFullscreen();
-            }
-
-            button.remove();
-        });
-    }
-
-    private async enablePhoneSensors() {
-        const deviceOrientationEvent = DeviceOrientationEvent as unknown as {
-            requestPermission?: () => Promise<PermissionState>;
-        };
-
-        if (deviceOrientationEvent.requestPermission) {
-            const permission = await deviceOrientationEvent.requestPermission();
-
-            if (permission !== 'granted') {
-                return;
-            }
-        }
-
-        window.addEventListener('deviceorientation', this.onDeviceOrientation);
-        this.updateScreenOrientation();
-    }
-
-    private onDeviceOrientation = (event: DeviceOrientationEvent) => {
-        this.deviceAlpha = event.alpha ?? 0;
-        this.deviceBeta = event.beta ?? 0;
-        this.deviceGamma = event.gamma ?? 0;
-    };
-
-    private updateScreenOrientation = () => {
-        this.screenOrientation =
-            screen.orientation?.angle ??
-            window.orientation as number ??
-            0;
-    };
-
-    private updatePhoneCamera() {
-        const alpha = THREE.MathUtils.degToRad(this.deviceAlpha);
-        const beta = THREE.MathUtils.degToRad(this.deviceBeta);
-        const gamma = THREE.MathUtils.degToRad(this.deviceGamma);
-        const orient = THREE.MathUtils.degToRad(this.screenOrientation);
-
-        this.euler.set(
-            beta,
-            alpha,
-            -gamma,
-            'YXZ'
-        );
-
-        this.camera.quaternion.setFromEuler(this.euler);
-        this.camera.quaternion.multiply(this.q1);
-        this.camera.quaternion.multiply(
-            this.q0.setFromAxisAngle(this.zee, -orient)
-        );
     }
 
     private createEntities() {
@@ -266,7 +163,10 @@ export default class VRScene {
             color: 0xffffff
         });
 
-        return new THREE.Mesh(geometry, material);
+        return new THREE.Mesh(
+            geometry,
+            material
+        );
     }
 
     private createCrosshair() {
@@ -329,8 +229,7 @@ export default class VRScene {
             for (let i = 0; i <= visibleSegments; i++) {
                 const angle =
                     -Math.PI / 2 +
-                    Math.PI *
-                    2 *
+                    Math.PI * 2 *
                     fixedProgress *
                     (i / visibleSegments);
 
@@ -358,10 +257,27 @@ export default class VRScene {
     }
 
     private checkGaze() {
-        this.raycaster.setFromCamera(
-            new THREE.Vector2(0, 0),
-            this.camera
-        );
+        if (this.debugMode) {
+            this.raycaster.setFromCamera(
+                new THREE.Vector2(0, 0),
+                this.camera
+            );
+        } else {
+            const direction = new THREE.Vector3(
+                0,
+                0,
+                -1
+            );
+
+            direction.applyQuaternion(
+                this.camera.quaternion
+            );
+
+            this.raycaster.set(
+                this.camera.position,
+                direction.normalize()
+            );
+        }
 
         const hits = this.raycaster.intersectObjects(
             this.buttons
@@ -435,32 +351,28 @@ export default class VRScene {
 
     private update() {
         const now = performance.now();
+
         const delta = (now - this.previousTime) / 1000;
 
         this.previousTime = now;
-
-        if (this.phoneVrMode) {
-            this.updatePhoneCamera();
-        }
 
         this.entities[this.currentEntity].update(delta);
 
         this.checkGaze();
     }
 
-    private animateNormal = () => {
+    private animateDesktop = () => {
         this.update();
 
-        if (this.phoneVrMode && this.stereoEffect) {
-            this.stereoEffect.render(this.scene, this.camera);
-        } else {
-            this.renderer.render(this.scene, this.camera);
-        }
+        this.renderer.render(
+            this.scene,
+            this.camera
+        );
 
-        requestAnimationFrame(this.animateNormal);
+        requestAnimationFrame(this.animateDesktop);
     };
 
-    private animateWebXR = () => {
+    private animateVR = () => {
         this.update();
 
         this.renderer.render(
@@ -476,11 +388,6 @@ export default class VRScene {
         this.camera.updateProjectionMatrix();
 
         this.renderer.setSize(
-            window.innerWidth,
-            window.innerHeight
-        );
-
-        this.stereoEffect?.setSize(
             window.innerWidth,
             window.innerHeight
         );
